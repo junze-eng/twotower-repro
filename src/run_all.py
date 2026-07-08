@@ -73,6 +73,7 @@ def run_one(model, tok, prompt, cfg):
     text = tok.decode(out[0][plen:], skip_special_tokens=True)
     return dict(output=text, nfe=nfe,
                 tokens_per_nfe=(cfg["max_new"] / nfe) if nfe else None,
+                tps=round(cfg["max_new"] / dt, 2),   # tokens/sec — the hardware-dependent 2.42x metric
                 wall_s=round(dt, 3))
 
 
