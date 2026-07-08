@@ -1,0 +1,84 @@
+"""Exp0 (GPU/online): run ONE diffusion generation and capture every denoising frame.
+
+The step_callback fires once per denoising step; we snapshot the reply span (xt) each
+time and dump to a compact npz. Rendering the GIF is a separate, LOCAL, GPU-free step
+(exp0_render.py). This is the only part of Exp0 that needs the pod.
+
+Defaults: max_new=64, block=16, steps=16  ->  4 blocks x 16 steps = 64 frames ("1/64").
+Use the TRAINING block size (16) for a clean upper-left triangle; pass a larger
+--block-size to visualize the collapse instead.
+"""
+import argparse
+import json
+import os
+
+import numpy as np
+import torch
+
+from twotower import load, MASK_TOKEN_ID, reset_nfe, get_nfe
+
+DEFAULT_PROMPT = (
+    "Natalia sold clips to 48 of her friends in April, and then she sold half as many "
+    "clips in May. How many clips did Natalia sell altogether in April and May? Answer:"
+)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--prompt", default=DEFAULT_PROMPT)
+    ap.add_argument("--max-new", type=int, default=64)      # divisible by block-size
+    ap.add_argument("--block-size", type=int, default=16)
+    ap.add_argument("--steps", type=int, default=16)
+    ap.add_argument("--gamma", type=float, default=0.8)
+    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--out", default="results/trace.npz")
+    args = ap.parse_args()
+
+    model, tok = load()
+    input_ids = tok(args.prompt, return_tensors="pt").input_ids.to("cuda:0")
+    plen = input_ids.shape[1]
+
+    frames, blocks, steps, ts = [], [], [], []
+
+    def cb(step_idx, steps_per_block, xt, t, logits, block_idx):
+        span = xt[0, plen:plen + args.max_new].detach().to("cpu").numpy().astype(np.int32)
+        frames.append(span)
+        blocks.append(int(block_idx))
+        steps.append(int(step_idx))
+        try:
+            ts.append(float(t))
+        except Exception:
+            ts.append(float("nan"))
+
+    reset_nfe(model)
+    with torch.no_grad():
+        out = model.generate_mask_diffusion(
+            input_ids,
+            max_new_tokens=args.max_new,
+            block_size=args.block_size,
+            steps_per_block=args.steps,
+            mask_token_id=MASK_TOKEN_ID,
+            temperature=args.temperature,
+            confidence_threshold=args.gamma,
+            eos_token_id=tok.eos_token_id,
+            step_callback=cb,
+        )
+
+    frames = np.stack(frames, 0)  # (F, L)
+    final = out[0, plen:plen + args.max_new].detach().cpu().numpy().astype(np.int32)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    meta = dict(
+        prompt=args.prompt, max_new=args.max_new, block_size=args.block_size,
+        steps=args.steps, gamma=args.gamma, temperature=args.temperature,
+        mask_token_id=MASK_TOKEN_ID, prompt_len=int(plen), nfe=get_nfe(model),
+        block_idx=blocks, step_idx=steps, t=ts,
+        sample_id=f"gsm8k/l{args.max_new}_b{args.block_size}_st{args.steps}_g{args.gamma}",
+    )
+    np.savez_compressed(args.out, frames=frames, final=final, meta=json.dumps(meta))
+    print(f"saved {args.out}  frames={frames.shape}  NFE={get_nfe(model)}  "
+          f"tokens/NFE={args.max_new / get_nfe(model):.2f}")
+    print("decoded final:", tok.decode(final, skip_special_tokens=True))
+
+
+if __name__ == "__main__":
+    main()

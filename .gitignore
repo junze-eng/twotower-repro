@@ -1,0 +1,19 @@
+# experiment outputs (regenerated on the pod)
+results/
+*.npz
+*.gif
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# HF cache (should live on the persistent volume, never in the repo)
+hf/
+*.safetensors
+
+# os / editor
+.DS_Store
+.ipynb_checkpoints/
