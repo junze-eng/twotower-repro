@@ -8,10 +8,9 @@ Two INDEPENDENT flags, read from model attributes so either can be toggled alone
                                         the denoiser Mamba layers instead of the context
                                         tower's states (i.e. no cross-tower state seeding).
 
-NOTE on ablation 2 (deliberate deviation from the spec's "pass None"): we do NOT have
-_denoiser_block_mamba's source, so passing None could crash it. Instead we feed
-same-shape zeros_like(...) — semantically identical ("Mamba starts from a zero state = no
-seeding") but shape/dtype/device-safe. Confirm this substitution is acceptable.
+Ablation 2 passes initial_states=None (confirmed against _denoiser_block_mamba: both
+causal_conv1d_fn and mamba_chunk_scan_combined natively accept None = "no initial state").
+This is the true "no seeding" semantics.
 
 The copy of _run_denoiser_step_diffusion below is byte-identical to the model's, except
 the lines marked ABLATION-2 / ABLATION-3. Original method is restored after the run.
@@ -90,8 +89,11 @@ def _ablatable_denoiser_step(self, block_ids, cache_state, t=None, den_cache=Non
             init_conv = den_cache.conv_states[layer_idx][..., -(d_conv - 1):]
             init_ssm = den_cache.ssm_states[layer_idx].contiguous()
             if disable_seed:                              # ABLATION-2: no cross-tower seed
-                init_conv = torch.zeros_like(init_conv)
-                init_ssm = torch.zeros_like(init_ssm)
+                # _denoiser_block_mamba natively supports None (causal_conv1d_fn and
+                # mamba_chunk_scan_combined both treat initial_states=None as "no state").
+                # None is the true "no seeding" semantics, cleaner than zeros.
+                init_conv = None
+                init_ssm = None
                 self._seed_zeroed_layers += 1
             h = self._denoiser_block_mamba(block.mixer, h, init_conv, init_ssm)
         elif block.block_type == "attention":
