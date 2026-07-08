@@ -5,7 +5,7 @@
 set -euo pipefail
 
 MAMBA_VER="${MAMBA_VER:-2.3.2.post1}"
-CAUSAL_VER="${CAUSAL_VER:-1.5.0.post8}"
+CAUSAL_VER="${CAUSAL_VER:-1.6.2.post1}"   # 1.6.2.post1 has torch2.8 wheels; 1.5.0.post8 did not
 
 # --- detect the four wheel tags from the live interpreter ---------------------
 read -r PY TORCH CU ABI <<EOF
