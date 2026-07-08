@@ -14,6 +14,18 @@ cd "$(dirname "$0")/.."               # run from repo root (needs src/)
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-/workspace/pip-cache}"
 mkdir -p "$PIP_CACHE_DIR"
 
+# --- persistent venv on /workspace so a CONTAINER SWAP does not wipe the env ---
+# --system-site-packages reuses the base image's torch/CUDA (we never reinstall torch).
+# After a swap you do NOT need to run this script again: `source /workspace/venv/bin/activate`.
+VENV="${VENV:-/workspace/venv}"
+if [ ! -f "$VENV/bin/activate" ]; then
+  echo ">>> creating persistent venv at $VENV (--system-site-packages)"
+  python -m venv --system-site-packages "$VENV" || { echo "venv create failed"; exit 1; }
+fi
+source "$VENV/bin/activate"
+python -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+echo "venv: $VIRTUAL_ENV | python: $(which python)"
+
 MAMBA_VER="${MAMBA_VER:-2.3.2.post1}"
 CAUSAL_VER="${CAUSAL_VER:-1.6.2.post1}"   # torch2.8 wheels; this mamba/causal pair targets triton 3.4
 
