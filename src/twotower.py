@@ -11,10 +11,20 @@ def load_tokenizer():
 
 
 def load(ctx_device="cuda:0", den_device="cuda:1", ar_only=False):
-    """Load the model and place the towers. ar_only puts a single tower on ctx_device."""
+    """Load the model and place the towers. ar_only puts a single tower on ctx_device.
+
+    low_cpu_mem_usage=False forces a SEQUENTIAL read of all shards into CPU RAM first
+    (~5 min from the MooseFS network volume at ~400MB/s), so the subsequent .to(cuda) is a
+    fast RAM->GPU copy. The default (mmap) makes place_towers do random network reads during
+    .to(), which crawls (~1h for 120GB). Needs ~130GB CPU RAM; if the box has less, set
+    TWOTOWER_LOWMEM=1 to fall back to the slow mmap path.
+    """
+    import os
     tok = load_tokenizer()
+    low_cpu = os.environ.get("TWOTOWER_LOWMEM", "0") == "1"
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME, torch_dtype=torch.bfloat16, trust_remote_code=True,
+        MODEL_NAME, dtype=torch.bfloat16, trust_remote_code=True,
+        low_cpu_mem_usage=low_cpu,
     )
     if ar_only:
         model = model.to(ctx_device)
