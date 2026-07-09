@@ -43,15 +43,21 @@ echo "wheel tags: $PY $TORCH $CU $ABI"
 MAMBA_URL="https://github.com/state-spaces/mamba/releases/download/v${MAMBA_VER}/mamba_ssm-${MAMBA_VER}+${CU}${TORCH}${ABI}-${PY}-${PY}-linux_x86_64.whl"
 CAUSAL_URL="https://github.com/Dao-AILab/causal-conv1d/releases/download/v${CAUSAL_VER}/causal_conv1d-${CAUSAL_VER}+${CU}${TORCH}${ABI}-${PY}-${PY}-linux_x86_64.whl"
 
-# --- base python deps (einops is REQUIRED by the modeling file!) ---
+# --- base python deps (einops is REQUIRED by the modeling file; hf_transfer speeds the
+#     126GB download). These are pure-python and must NOT touch torch. ---
 echo ">>> base deps"
-pip install -q einops "transformers==4.57.1" accelerate safetensors sentencepiece \
-    matplotlib imageio pillow datasets || { echo "base deps failed"; exit 1; }
+python -m pip install -q einops "transformers==4.57.1" accelerate safetensors sentencepiece \
+    matplotlib imageio pillow datasets hf_transfer || { echo "base deps failed"; exit 1; }
 
-# --- ABI-sensitive kernels (pip is idempotent: skips if already satisfied) ---
-echo ">>> kernels: causal_conv1d $CAUSAL_VER, mamba_ssm $MAMBA_VER"
-pip install -q "$CAUSAL_URL" || { echo "!! causal wheel 404 ($CU/$TORCH/$ABI/$PY) - see https://github.com/Dao-AILab/causal-conv1d/releases"; exit 1; }
-pip install -q "$MAMBA_URL"  || { echo "!! mamba wheel 404 ($CU/$TORCH/$ABI/$PY) - see https://github.com/state-spaces/mamba/releases"; exit 1; }
+# --- ABI-sensitive kernels. CRITICAL: --no-deps. Without it, causal-conv1d 1.6.2's
+#     dependency chain UPGRADES torch (2.8 -> 2.13) + a CUDA-13 stack, which breaks the
+#     mamba .so ABI (undefined symbol). The wheels are prebuilt for the base image's torch,
+#     so they need no deps resolved. ---
+echo ">>> kernels (--no-deps, torch is never touched): causal $CAUSAL_VER, mamba $MAMBA_VER"
+python -m pip install -q --no-deps "$CAUSAL_URL" || { echo "!! causal wheel 404 ($CU/$TORCH/$ABI/$PY) - see https://github.com/Dao-AILab/causal-conv1d/releases"; exit 1; }
+python -m pip install -q --no-deps "$MAMBA_URL"  || { echo "!! mamba wheel 404 ($CU/$TORCH/$ABI/$PY) - see https://github.com/state-spaces/mamba/releases"; exit 1; }
+TORCH_NOW=$(python -c "import torch;print(torch.__version__)" 2>/dev/null || echo BROKEN)
+[ "$TORCH_NOW" = "$TORCH_V" ] || echo "!! WARNING: torch changed from $TORCH_V to $TORCH_NOW — deps churn!"
 
 python - <<'PYEOF' || { echo "!! kernel import failed"; exit 1; }
 import causal_conv1d, mamba_ssm, einops, transformers, triton
