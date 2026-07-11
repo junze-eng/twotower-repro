@@ -35,6 +35,8 @@ run $PY src/ruler_lite.py --lengths 2048 8192 16384 32768 --out results/ruler.js
 run $PY src/ablation_topk.py --prompts data/gsm8k_mini.jsonl --out results/abl_topk.pkl --limit 10
 # ⑥ before/after bug demo: BUGGY word-salad (NOFIX) vs the fixed b16 you already captured
 run env TWOTOWER_NOFIX=1 $PY src/exp0_capture.py --block-size 16 --max-new 64 --steps 16 --gamma 0.8 --out results/trace_buggy_demo.npz
+# ⑦ aggressive-γ triangle (same prompt as b16): does τb stay high at MAX parallelism (γ0.5, steps4)?
+run $PY src/exp0_capture.py --block-size 16 --max-new 64 --steps 4 --gamma 0.5 --out results/trace_tri_aggr.npz
 
 echo "===== ALL DONE ====="
 ls -la results/*.jsonl results/*.npz results/*.pkl 2>/dev/null
