@@ -38,7 +38,7 @@ def main():
     input_ids = tok(args.prompt, return_tensors="pt").input_ids.to("cuda:0")
     plen = input_ids.shape[1]
 
-    raw_frames, widths, blocks, steps, ts = [], [], [], [], []
+    raw_frames, widths, blocks, steps, ts, raw_conf = [], [], [], [], [], []
 
     def cb(step_idx, steps_per_block, xt, t, logits, block_idx):
         # Capture the FULL xt row untouched. Do NOT slice by plen: at callback time xt is
@@ -58,6 +58,14 @@ def main():
             ts.append(float(t))
         except Exception:
             ts.append(float("nan"))
+        # per-position max-softmax confidence (defensive; None if logits shape is unexpected).
+        # Enables commit-batch confidence + a later confidence->correctness analysis.
+        try:
+            lg = logits[0] if logits.dim() == 3 else logits
+            c = torch.softmax(lg.float(), dim=-1).max(dim=-1).values
+            raw_conf.append(c.detach().to("cpu").numpy().astype(np.float32))
+        except Exception:
+            raw_conf.append(None)
 
     reset_nfe(model)
     with torch.no_grad():
@@ -80,6 +88,12 @@ def main():
     frames = np.full((len(raw_frames), W), MASK_TOKEN_ID, dtype=np.int32)
     for i, r in enumerate(raw_frames):
         frames[i, :r.shape[0]] = r
+    # per-position confidence, padded to (F, Wc) with nan (all-nan if capture failed)
+    Wc = max((c.shape[0] for c in raw_conf if c is not None), default=0)
+    conf = np.full((len(raw_conf), Wc), np.nan, dtype=np.float32)
+    for i, c in enumerate(raw_conf):
+        if c is not None:
+            conf[i, :c.shape[0]] = c
     final = out[0, plen:plen + args.max_new].detach().cpu().numpy().astype(np.int32)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     meta = dict(
@@ -89,7 +103,7 @@ def main():
         block_idx=blocks, step_idx=steps, t=ts, frame_width=widths,
         sample_id=f"gsm8k/l{args.max_new}_b{args.block_size}_st{args.steps}_g{args.gamma}",
     )
-    np.savez_compressed(args.out, frames=frames, final=final, meta=json.dumps(meta))
+    np.savez_compressed(args.out, frames=frames, conf=conf, final=final, meta=json.dumps(meta))
     print(f"saved {args.out}  frames={frames.shape}  NFE={get_nfe(model)}  "
           f"tokens/NFE={args.max_new / get_nfe(model):.2f}")
     print("decoded final:", tok.decode(final, skip_special_tokens=True))
