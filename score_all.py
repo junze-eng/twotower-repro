@@ -207,11 +207,49 @@ def score_ruler(ruler_path, outdir):
                              oom=agg[(m, L)]["oom"]) for m in modes for L in lens}
 
 
+# ---------------- confidence -> correctness (cf. DG finding #6) ----------------
+def score_conf(conf_path, outdir):
+    rows = load(conf_path)
+    if not rows:
+        print("[conf] missing, skipping"); return None
+    pts = []  # (mean_commit_conf, correct)
+    for r in rows:
+        c = r.get("mean_commit_conf")
+        if c is None:
+            continue
+        pts.append((c, 1 if gsm_clean(r.get("output", ""), r.get("reference")) else 0))
+    if not pts:
+        print("[conf] no usable rows"); return None
+    cc = [c for c, o in pts if o]; wc = [c for c, o in pts if not o]
+    mc = sum(cc) / len(cc) if cc else float("nan")
+    mw = sum(wc) / len(wc) if wc else float("nan")
+    n = len(pts); mx = sum(c for c, _ in pts) / n; my = sum(o for _, o in pts) / n
+    sx = (sum((c - mx) ** 2 for c, _ in pts) / n) ** 0.5
+    sy = (sum((o - my) ** 2 for _, o in pts) / n) ** 0.5
+    r_pb = (sum((c - mx) * (o - my) for c, o in pts) / n) / (sx * sy) if sx > 0 and sy > 0 else float("nan")
+    summary = dict(n=n, n_correct=len(cc), mean_conf_correct=round(mc, 3),
+                   mean_conf_wrong=round(mw, 3), point_biserial_r=round(r_pb, 3))
+    print("[conf]", json.dumps(summary, ensure_ascii=False))
+    fig, ax = plt.subplots(figsize=(6.4, 4.4)); fig.patch.set_facecolor(SURF); style(ax)
+    ax.bar([0, 1], [mw, mc], color=[RED, BLUE], width=0.55)
+    for x, v in zip([0, 1], [mw, mc]):
+        if v == v:
+            ax.annotate(f"{v:.3f}", (x, v), textcoords="offset points", xytext=(0, 4),
+                        ha="center", fontweight="bold", color=INK)
+    ax.set_xticks([0, 1]); ax.set_xticklabels([f"wrong (n={len(wc)})", f"correct (n={len(cc)})"])
+    ax.set_ylabel("mean commit confidence", color=INK2, fontsize=10)
+    ax.set_title(f"Does confidence predict correctness?  point-biserial r={summary['point_biserial_r']}",
+                 color=INK, fontsize=11, fontweight="bold", loc="left")
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "fig_conf_correct.png"), dpi=140, facecolor=SURF)
+    plt.close(fig); print("wrote fig_conf_correct.png")
+    return summary
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ar"); ap.add_argument("--diff")
     ap.add_argument("--he"); ap.add_argument("--he-ar"); ap.add_argument("--he-prompts")
-    ap.add_argument("--ruler"); ap.add_argument("--outdir", default="figs")
+    ap.add_argument("--ruler"); ap.add_argument("--conf"); ap.add_argument("--outdir", default="figs")
     ap.add_argument("--no-exec", action="store_true", help="skip executing HumanEval code")
     a = ap.parse_args()
     os.makedirs(a.outdir, exist_ok=True)
@@ -219,6 +257,7 @@ def main():
     if a.ar or a.diff: out["ar"] = score_ar(a.ar, a.diff, a.outdir)
     if a.he or a.he_ar: out["humaneval"] = score_humaneval(a.he, a.he_ar, a.he_prompts, a.outdir, not a.no_exec)
     if a.ruler: out["ruler"] = score_ruler(a.ruler, a.outdir)
+    if a.conf: out["conf"] = score_conf(a.conf, a.outdir)
     with open(os.path.join(a.outdir, "score_summary.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
     print("done -> score_summary.json")
