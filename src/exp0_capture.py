@@ -38,11 +38,20 @@ def main():
     input_ids = tok(args.prompt, return_tensors="pt").input_ids.to("cuda:0")
     plen = input_ids.shape[1]
 
-    frames, blocks, steps, ts = [], [], [], []
+    raw_frames, widths, blocks, steps, ts = [], [], [], [], []
 
     def cb(step_idx, steps_per_block, xt, t, logits, block_idx):
-        span = xt[0, plen:plen + args.max_new].detach().to("cpu").numpy().astype(np.int32)
-        frames.append(span)
+        # Capture the FULL xt row untouched. Do NOT slice by plen: at callback time xt is
+        # NOT the prompt+reply sequence (that's the return value `out`), it's a narrower
+        # reply/block canvas -- the old `xt[0, plen:plen+max_new]` slice ran off the end and
+        # produced 0-width frames. We keep the raw row + its width + block_idx here, and let
+        # the offline heatmap builder place each row correctly regardless of xt's layout.
+        row = xt[0].detach().to("cpu").numpy().astype(np.int32)
+        if not raw_frames:
+            print(f"[cb] first xt row width={row.shape[0]}  "
+                  f"(plen={plen}, max_new={args.max_new}, block_size={args.block_size})")
+        raw_frames.append(row)
+        widths.append(int(row.shape[0]))
         blocks.append(int(block_idx))
         steps.append(int(step_idx))
         try:
@@ -64,14 +73,20 @@ def main():
             step_callback=cb,
         )
 
-    frames = np.stack(frames, 0)  # (F, L)
+    # Pad ragged rows to a rectangular (F, W) grid with MASK (= uncommitted/future position;
+    # also stays tokenizer-decodable). block_idx / step_idx / frame_width let the offline
+    # builder reconstruct the position x step triangle no matter what xt's width means.
+    W = max(widths) if widths else 0
+    frames = np.full((len(raw_frames), W), MASK_TOKEN_ID, dtype=np.int32)
+    for i, r in enumerate(raw_frames):
+        frames[i, :r.shape[0]] = r
     final = out[0, plen:plen + args.max_new].detach().cpu().numpy().astype(np.int32)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     meta = dict(
         prompt=args.prompt, max_new=args.max_new, block_size=args.block_size,
         steps=args.steps, gamma=args.gamma, temperature=args.temperature,
         mask_token_id=MASK_TOKEN_ID, prompt_len=int(plen), nfe=get_nfe(model),
-        block_idx=blocks, step_idx=steps, t=ts,
+        block_idx=blocks, step_idx=steps, t=ts, frame_width=widths,
         sample_id=f"gsm8k/l{args.max_new}_b{args.block_size}_st{args.steps}_g{args.gamma}",
     )
     np.savez_compressed(args.out, frames=frames, final=final, meta=json.dumps(meta))
