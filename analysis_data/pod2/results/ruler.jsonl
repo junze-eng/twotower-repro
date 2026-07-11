@@ -1,0 +1,24 @@
+{"mode": "diff", "target_len": 2048, "ctx_len": 2017, "code": 4823, "ok": true, "nfe": 12, "tokens_per_nfe": 1.333, "tps": 0.51, "wall_s": 31.386, "output": " 4823.Question: Write a sentence that is [negative"}
+{"mode": "ar", "target_len": 2048, "ctx_len": 2017, "code": 4823, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.42, "wall_s": 4.685, "output": " 4823.Question: What is the sentiment of the following"}
+{"mode": "diff", "target_len": 2048, "ctx_len": 2017, "code": 7591, "ok": true, "nfe": 11, "tokens_per_nfe": 1.455, "tps": 2.57, "wall_s": 6.219, "output": " 7591.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 2048, "ctx_len": 2017, "code": 7591, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.42, "wall_s": 4.679, "output": " 7591.Question: What is the sentiment of the following"}
+{"mode": "diff", "target_len": 2048, "ctx_len": 2017, "code": 3164, "ok": true, "nfe": 11, "tokens_per_nfe": 1.455, "tps": 2.57, "wall_s": 6.237, "output": " 3164.Question: Continue the following story.\n\nThe man"}
+{"mode": "ar", "target_len": 2048, "ctx_len": 2017, "code": 3164, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.44, "wall_s": 4.657, "output": " 3164.Question: What is the sentiment of the following"}
+{"mode": "diff", "target_len": 8192, "ctx_len": 7969, "code": 4823, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.63, "wall_s": 6.093, "output": " 4823.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 8192, "ctx_len": 7969, "code": 4823, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.2, "wall_s": 4.994, "output": " 4823.Question: Write a sentence that about [The"}
+{"mode": "diff", "target_len": 8192, "ctx_len": 7969, "code": 7591, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.63, "wall_s": 6.072, "output": " 7591.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 8192, "ctx_len": 7969, "code": 7591, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.19, "wall_s": 5.01, "output": " 7591.Question: Write a sentence that about [The"}
+{"mode": "diff", "target_len": 8192, "ctx_len": 7969, "code": 3164, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.64, "wall_s": 6.069, "output": " 3164.Question: Continue the following story.\n\nThe man"}
+{"mode": "ar", "target_len": 8192, "ctx_len": 7969, "code": 3164, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 3.2, "wall_s": 4.992, "output": " 3164.Question: Write a sentence that about [The"}
+{"mode": "diff", "target_len": 16384, "ctx_len": 15905, "code": 4823, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.41, "wall_s": 6.648, "output": " 4823.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 16384, "ctx_len": 15905, "code": 4823, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 2.86, "wall_s": 5.601, "output": " 4823. Remember it.\n\nQuestion: What is the special access"}
+{"mode": "diff", "target_len": 16384, "ctx_len": 15905, "code": 7591, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.42, "wall_s": 6.62, "output": " 7591.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 16384, "ctx_len": 15905, "code": 7591, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 2.84, "wall_s": 5.64, "output": " 7591. Remember it.\n\nQuestion: What is the special access"}
+{"mode": "diff", "target_len": 16384, "ctx_len": 15905, "code": 3164, "ok": true, "nfe": 10, "tokens_per_nfe": 1.6, "tps": 2.42, "wall_s": 6.601, "output": " 3164.Question: What is the sentiment of the following"}
+{"mode": "ar", "target_len": 16384, "ctx_len": 15905, "code": 3164, "ok": true, "nfe": 16, "tokens_per_nfe": 1.0, "tps": 2.84, "wall_s": 5.641, "output": " 3164. Remember it.Question: What is the main"}
+{"mode": "diff", "target_len": 32768, "ctx_len": 31777, "code": 4823, "oom": true}
+{"mode": "ar", "target_len": 32768, "ctx_len": 31777, "code": 4823, "oom": true}
+{"mode": "diff", "target_len": 32768, "ctx_len": 31777, "code": 7591, "oom": true}
+{"mode": "ar", "target_len": 32768, "ctx_len": 31777, "code": 7591, "oom": true}
+{"mode": "diff", "target_len": 32768, "ctx_len": 31777, "code": 3164, "oom": true}
+{"mode": "ar", "target_len": 32768, "ctx_len": 31777, "code": 3164, "oom": true}

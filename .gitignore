@@ -22,3 +22,7 @@ hf/
 # (this is why denoising.gif etc. no longer need `git add -f`)
 !figs/
 !figs/**
+
+# analysis data snapshot (small ~2MB) so analysis can continue on another machine via git pull
+!analysis_data/
+!analysis_data/**

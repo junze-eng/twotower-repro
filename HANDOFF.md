@@ -241,3 +241,24 @@ python make_figs.py ; python make_gif.py
 - RULER（16K 内 100%、32K OOM、并行度低）→ 新增长上下文小节
 - before/after 词沙拉 vs 正确 → §6
 - topk / conf → 数据到位后补
+
+### ★ 在家怎么跑（`git pull` 即有全部数据，无需带任何文件）
+
+数据已随仓库提交在 **`analysis_data/`**（Jul9 的 `e1/e2/e3/abl_*.jsonl`、`trace_main/trace_moe.pkl`
++ `make_figs.py`/`make_gif.py` + `pod2/`{新批 ar/he/ruler/trace_tri_*}）。在家：
+
+```bash
+git pull
+cd analysis_data
+# τb × 任务 + 真三角 + 真GIF
+for n in b16 fact code b64; do python ../analyze_commit.py --npz pod2/results/trace_tri_$n.npz --outdir figs_commit/$n; done
+python ../analyze_commit.py --npz pod2/results/trace_buggy_demo.npz --outdir figs_commit/buggy   # before/after
+# AR 对比 + HumanEval pass@1 + RULER
+python ../score_all.py --ar pod2/results/ar.jsonl --diff e2.jsonl \
+  --he pod2/results/he_collapse.jsonl --he-ar pod2/results/he_ar.jsonl --he-prompts pod2/data/humaneval_mini.jsonl \
+  --ruler pod2/results/ruler.jsonl --outdir figs_new
+# 6 张核心图 + 去噪 GIF（make_figs/make_gif 就在此目录，数据同目录）
+python make_figs.py ; python make_gif.py
+```
+（等 `abl_topk.pkl` / `conf_correct.jsonl` / `trace_tri_aggr.npz` 下载后：丢进 `pod2/results/`，
+analyze_commit 循环里加 `aggr`、score_all 命令加 `--conf pod2/results/conf_correct.jsonl`。）
