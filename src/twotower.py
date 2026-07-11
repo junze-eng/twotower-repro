@@ -85,10 +85,12 @@ def load(ctx_device="cuda:0", den_device="cuda:1", ar_only=False):
     low_cpu = os.environ.get("TWOTOWER_LOWMEM", "0") == "1"
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME, dtype=torch.bfloat16, trust_remote_code=True, low_cpu_mem_usage=low_cpu)
-    if ar_only:
-        model = model.to(ctx_device)
-    else:
-        model.place_towers_on_devices(ctx_device, den_device)
+    # from_pretrained ALWAYS materializes both towers (~126GB bf16). ar_only used to do
+    # model.to(ctx_device), cramming both towers onto one card -> OOM on an 80GB GPU. Split
+    # the towers across the two cards exactly like diffusion; generate_ar just exercises the
+    # context tower on ctx_device while the denoiser sits idle on den_device. (ar_only is kept
+    # in the signature for callers but no longer forces a single-card placement.)
+    model.place_towers_on_devices(ctx_device, den_device)
     model.eval()
     apply_diffusion_fix(model)
     return model, tok

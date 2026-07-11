@@ -55,7 +55,11 @@ def verify_active_count(model, tok, k):
         cap["k"] = int(idx.shape[-1])
 
     handles = [m.register_forward_hook(hook) for _, m in find_routers(model, False)[:1]]
-    ids = tok("verify", return_tensors="pt").input_ids.to("cuda:0")
+    # NOTE: use a normal-length prompt. A 1-token prompt (e.g. "verify") makes the context
+    # cache build process prompt[:-1] == empty -> cache_position[-1] IndexError inside
+    # _update_causal_mask. Real experiments use ~40-token prompts, so only this probe hit it.
+    ids = tok("Question: What is 2 + 2? Answer:",
+              return_tensors="pt").input_ids.to("cuda:0")
     with torch.no_grad():
         model.generate_mask_diffusion(ids, max_new_tokens=16, block_size=16,
                                        steps_per_block=2, mask_token_id=MASK_TOKEN_ID,
