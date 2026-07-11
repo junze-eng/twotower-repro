@@ -183,3 +183,61 @@ python make_figs.py ; python make_gif.py
 1. 等 `run_batch.sh` 打印 `ALL DONE`；`grep FAILED results/logs/batch.log` 有失败趁 pod 在补跑。
 2. 补跑 ⑦（若批是加 ⑦ 之前启动的）：`python src/exp0_capture.py --block-size 16 --max-new 64 --steps 4 --gamma 0.5 --out results/trace_tri_aggr.npz`
 3. 下载 `results/*` + `data/humaneval_mini.jsonl` +（已有）`trace_tri_fact/code.npz` 到 `all_results\` → 对 Claude 说「跑分析」。
+
+---
+
+## 11. 分析进度 + ★已算出的真实结果（2026-07-11 晚，本地已跑一半）
+
+**数据**：`tt_results2.tar.gz` 已下载解压到 `all_results/pod2/`（含 `ar` / `he_collapse` / `he_ar` /
+`ruler.jsonl`、`trace_tri_{b16,fact,code,b64,math}.npz`、`trace_buggy_demo.npz`）。Jul9 数据
+（`e1/e2/e3.jsonl`、`abl_remask/abl_denoiser.jsonl`、`trace_main/trace_moe.pkl`）在 `all_results/` 顶层。
+**仍缺（pod 还在跑 topk+conf，下批再下载）**：`abl_topk.pkl`、`conf_correct.jsonl`、`trace_tri_aggr.npz`。
+
+### 已算出的结果（可直接写进报告）
+
+**τb × 任务型**（全 ~0.9，远高于 DiffusionGemma 的 0.43–0.60 → TwoTower 在所有任务都强左到右、无 DG 的任务依赖）：
+| 任务 | Kendall τb | commit-batch 均/中/峰 | NFE |
+|---|---|---|---|
+| b16 数学 | **0.898** | 1.82 / 1 / 9 | 32 |
+| fact 事实 | **0.936** | 1.61 / 1 / 9 | 35 |
+| code 代码 | **0.912** | 3.07 / 1 / 13 | 18 |
+| b64 块64 | **0.915** | 5.71 / 4 / 28 | 19 |
+
+→ 块16 每步中位提交 **1** 个（≈AR）；块64 批更宽（中位4/峰28，逼近 DG 的 13–26）**但质量崩**（见 HE）。
+
+**AR 对比**：质量保留 **100%**（AR 与 diff clean-correct 均 100%）；ar_tps 4.19 / diff_tps 6.13 →
+wall-clock **×1.46**（慢速修复偏悲观，报告用 tokens/NFE=**3.33** 更干净）。
+
+**HumanEval pass@1 代码侧崩溃**（复现论文 Table 4）：block 8/16/32/64 = **90 / 80 / 50 / 10%**，AR=90%。
+→ 单调崩溃，块16→64 从 80 掉到 10。
+
+**RULER 长上下文**：diff 与 ar 在 2K/8K/16K 检索均 **100%**；**32K 两者都 OOM**（2×A100 装不下）。
+diff 长上下文 tokens/NFE≈1.3–1.5（needle 答案短、单块）→ **长上下文能力继承自冻结 AR 塔**，diffusion 没帮上，符合论点。
+
+**已生成的图**：`all_results/figs_commit/{b16,fact,code,b64}/`（fig_commit_order / fig_commit_batch / denoising_real.gif）、
+`all_results/figs_new/`（fig_ar_compare / fig_he_collapse / fig_ruler）；也复制进仓库 `figs/`（`fig_ar_compare.png`
+`fig_he_collapse.png` `fig_ruler.png` `fig_commit_order_{b16,fact,code,b64}.png`）。
+
+### 本地续跑的确切命令（在 `all_results/` 里跑；`<repo>` = twotower-repro 目录）
+
+```bash
+# τb × 任务（aggr 等下载后再加）
+for n in b16 fact code b64 aggr; do python <repo>/analyze_commit.py --npz pod2/results/trace_tri_$n.npz --outdir figs_commit/$n; done
+# before/after（buggy 词沙拉 vs 修复后 b16）
+python <repo>/analyze_commit.py --npz pod2/results/trace_buggy_demo.npz --outdir figs_commit/buggy
+# AR / HumanEval pass@1 / RULER /（conf 下载后加 --conf pod2/results/conf_correct.jsonl）
+python <repo>/score_all.py --ar pod2/results/ar.jsonl --diff e2.jsonl \
+  --he pod2/results/he_collapse.jsonl --he-ar pod2/results/he_ar.jsonl --he-prompts pod2/data/humaneval_mini.jsonl \
+  --ruler pod2/results/ruler.jsonl --outdir figs_new
+# 6 张核心图 + 去噪 GIF（Jul9 数据，需数据在脚本同目录 → 在 all_results 里跑 make_figs/make_gif 的本地副本）
+python make_figs.py ; python make_gif.py
+# top-k：数据到位后 pickle 读 abl_topk.pkl（let Claude 写个小汇总）
+```
+
+### 待并进 `REPORT_TwoTower.md`
+- τb×任务表 + 真三角/真GIF → §7 论点A（加与 DG 的 τb/commit-batch 对照）
+- AR 100% 保留 / ×1.46 wall-clock / tokens/NFE 3.33 → §8（替换引论文2.42×，注明 wall-clock 偏悲观）
+- HumanEval pass@1 **90/80/50/10** → §7 论点C 代码侧（复现 Table 4）
+- RULER（16K 内 100%、32K OOM、并行度低）→ 新增长上下文小节
+- before/after 词沙拉 vs 正确 → §6
+- topk / conf → 数据到位后补
