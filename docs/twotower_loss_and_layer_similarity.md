@@ -12,6 +12,33 @@ experimental result.
 
 ## 1. Loss Function
 
+Quick intuition:
+
+```text
+TwoTower trains the denoising tower to do masked-token denoising.
+
+Given:
+  clean context
+  current block with randomly masked tokens
+
+Predict:
+  the original clean tokens at the masked positions
+
+Loss:
+  cross entropy / negative log-likelihood on masked positions
+```
+
+In short:
+
+```text
+L = mean_{i where x_t[i] is MASK} CE(logits_i, x_0[i])
+```
+
+This is similar in spirit to masked language modeling, but the conditioning is
+different: the previous context is represented by a frozen AR context tower, and
+the current block is denoised by a separate denoising tower with timestep
+conditioning.
+
 TwoTower trains a denoising tower conditioned on a frozen AR context tower. For
 each training example, the clean sequence is split into a clean context and a
 target block:
@@ -62,6 +89,16 @@ However, the paper makes an important engineering choice: the theoretical
 strict diffusion likelihood or ELBO objective and makes the practical training
 objective closer to stable masked-token denoising conditioned on a strong AR
 context.
+
+This distinction matters for the layer-similarity question. If the effective
+training signal is closer to stable masked-token denoising than to a strict
+time-weighted diffusion objective, the denoising tower may not necessarily
+develop the same representation redundancy as a native diffusion language
+model. It may instead learn a narrower behavior:
+
+```text
+use strong AR context conditioning to fill masked positions in the current block
+```
 
 This matters for the interpretation of the inference ablations. The model is
 trained with time conditioning through AdaLN, but if freezing the real `t` at
