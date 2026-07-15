@@ -58,6 +58,13 @@ python src/ruler_lite.py --lengths 2048 8192 16384 32768 --out results/ruler.jso
 
 # ⑤(可选)top-k MoE 消融 —— 脚注级,别指望推进论点
 python src/ablation_topk.py --prompts data/gsm8k_mini.jsonl --out results/abl_topk.pkl --limit 10
+
+# ⑥ ★ 层间冗余:AR 塔 vs 扩散塔(对应 arXiv 2603.07475;图直接在 pod 上出)
+#   纯数学自检(无需模型/GPU,任意机器):
+python src/layer_similarity.py --selftest
+#   真跑(2 卡):写 results/layer_sim/*.csv + summary.json + figs/fig_layer_redundancy.png
+python src/layer_similarity.py --prompts data/gsm8k_mini.jsonl --out results/layer_sim \
+    --num-prompts 8 --block-size 16 --plot
 ```
 
 ## Phase 4 — 下载 + 停 pod
@@ -65,6 +72,7 @@ python src/ablation_topk.py --prompts data/gsm8k_mini.jsonl --out results/abl_to
 把这些拉回本地(放进本地 `results/` 或分析目录),然后**停 pod**:
 ```
 results/trace_tri_b16.npz  trace_tri_b64.npz  ar.jsonl  he_collapse.jsonl  he_ar.jsonl  ruler.jsonl  abl_topk.pkl
+results/layer_sim/   figs/fig_layer_redundancy.png   # 层间冗余(⑥,--plot 已在 pod 出图)
 data/humaneval_mini.jsonl   # pass@1 打分需要它拿函数签名
 ```
 
