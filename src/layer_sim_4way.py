@@ -151,27 +151,33 @@ def _self_attention(mixer, hidden, is_causal):
 
 
 def capture_clean(model, tower, input_ids, bidir):
-    """One clean pass, no cache. Returns hidden_states[53] (cpu float)."""
+    """One clean pass, no cache. Returns hidden_states[53] (cpu float).
+
+    Runs under `torch.cuda.device(tower_device)`: the Mamba chunk-scan is a Triton kernel and
+    Triton launches on the CURRENT cuda device. With the denoiser on cuda:1 but current device
+    cuda:0, the kernel can't reach the cuda:1 tensors -> "Pointer argument cannot be accessed".
+    """
     device = next(tower.parameters()).device
-    ids = input_ids.to(device)
-    cache_position = torch.arange(ids.shape[1], device=device)
-    hidden = tower.embeddings(ids)
-    hs = [hidden[0].detach().float().cpu()]
-    for block in tower.layers:
-        residual = hidden
-        if block.residual_in_fp32:
-            residual = residual.to(torch.float32)
-        h = block.norm(hidden.to(dtype=block.norm.weight.dtype))
-        if block.block_type == "mamba":
-            h = block.mixer(h, cache_params=None, cache_position=cache_position)
-        elif block.block_type == "attention":
-            h = _self_attention(block.mixer, h, is_causal=(not bidir))
-        elif block.block_type in ("mlp", "moe"):
-            h = block.mixer(h)
-        else:
-            raise ValueError(block.block_type)
-        hidden = residual + h
-        hs.append(hidden[0].detach().float().cpu())
+    with torch.cuda.device(device):
+        ids = input_ids.to(device)
+        cache_position = torch.arange(ids.shape[1], device=device)
+        hidden = tower.embeddings(ids)
+        hs = [hidden[0].detach().float().cpu()]
+        for block in tower.layers:
+            residual = hidden
+            if block.residual_in_fp32:
+                residual = residual.to(torch.float32)
+            h = block.norm(hidden.to(dtype=block.norm.weight.dtype))
+            if block.block_type == "mamba":
+                h = block.mixer(h, cache_params=None, cache_position=cache_position)
+            elif block.block_type == "attention":
+                h = _self_attention(block.mixer, h, is_causal=(not bidir))
+            elif block.block_type in ("mlp", "moe"):
+                h = block.mixer(h)
+            else:
+                raise ValueError(block.block_type)
+            hidden = residual + h
+            hs.append(hidden[0].detach().float().cpu())
     return hs
 
 
@@ -184,6 +190,8 @@ def capture_natural(model, cache_state, block_ids, t_scalar, ssm_diag):
     _get_mod_params, _modulate = mod._get_mod_params, mod._modulate
     tower = model.denoiser_tower
     den_device = next(tower.parameters()).device
+    _dev_ctx = torch.cuda.device(den_device)  # Triton kernels launch on the current device
+    _dev_ctx.__enter__()
     den_input = block_ids.to(den_device)
 
     t_emb = None
@@ -236,6 +244,7 @@ def capture_natural(model, cache_state, block_ids, t_scalar, ssm_diag):
             h = gate.unsqueeze(1) * h
         hidden = residual + h
         hs.append(hidden[0].detach().float().cpu())
+    _dev_ctx.__exit__(None, None, None)
     return hs
 
 
