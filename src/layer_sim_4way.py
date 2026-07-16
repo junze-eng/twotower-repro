@@ -27,13 +27,18 @@ Decision tree (printed at the end):
 Metrics per path:
   * token_collapse[L] = mean_{i!=j} cos(h_L[i], h_L[j])   (global token collapse; L over 53 hidden states)
   * adjacent_token[L] = mean_{|i-j|=1} cos                (local smoothness)
-  * rel_update[L]     = mean_t ||mixer_out_L[t]|| / ||residual_in_L[t]||   (how much layer L injects;
-                        NOT washed out by the residual add, unlike adjacent-LAYER cosine)
+  * rel_update[L]     = mean_t ||h_L[t]-h_{L-1}[t]|| / ||h_{L-1}[t]||   (how much layer L injects into the
+                        residual stream; = ||mixer_out|| for clean paths, ||gate*mixer_out|| for natural.
+                        NOT washed out by the residual add, unlike adjacent-LAYER cosine.)
 
-Captures are INLINE (not hooks): the tower's real forward paths (_forward_tower_with_cache /
-_run_denoiser_step_diffusion) iterate block.norm/block.mixer manually and NEVER call block.forward,
-so nn.Module forward hooks on NemotronHBlock do not fire. Every capture is .detach().float().cpu()
-immediately (52 fp32 layers would otherwise blow up memory).
+CAPTURE NOTES
+  * Inline, NOT hooks: the tower forward paths iterate block.norm/block.mixer manually and never call
+    block.forward, so nn.Module forward hooks on NemotronHBlock do not fire.
+  * NO cache is built for the clean paths — passing a fresh FixedHybridCache into the Mamba chunk-scan
+    kernel makes it read a CPU-side state buffer and Triton dies. The clean forward needs no cache
+    (single pass, zero initial state), so mamba is called as block.mixer(h, cache_params=None, ...),
+    exactly what the real no-cache forward does.
+  * All captures are .detach().float().cpu() immediately (52 fp32 layers would blow up memory).
 
     python src/layer_sim_4way.py --selftest
     python src/layer_sim_4way.py --out results/layer_sim_4way.npz --plot           # builtin 5 prompts
@@ -41,7 +46,6 @@ immediately (52 fp32 layers would otherwise blow up memory).
 """
 import argparse
 import inspect
-import json
 import math
 import os
 import sys
@@ -109,72 +113,58 @@ def structure_of(hidden_list):
     return collapse, adjacent
 
 
-def rel_update_of(mixer_outs, residual_ins):
-    """per-layer mean_t ||mixer_out[t]|| / ||residual_in[t]||."""
+def rel_update_from_hs(hs):
+    """per-layer mean_t ||h_L - h_{L-1}|| / ||h_{L-1}||, from the captured hidden states."""
     out = []
-    for mo, ri in zip(mixer_outs, residual_ins):
-        num = mo.float().norm(dim=-1)
-        den = ri.float().norm(dim=-1).clamp(min=1e-6)
-        out.append((num / den).mean().item())
+    for L in range(1, len(hs)):
+        delta = (hs[L] - hs[L - 1]).float().norm(dim=-1)
+        base = hs[L - 1].float().norm(dim=-1).clamp(min=1e-6)
+        out.append((delta / base).mean().item())
     return out
 
 
 # ======================================================================
 # Unified capture for the three CLEAN-TEXT paths (ctx_clean/den_clean/den_bidir).
-# Mirrors NemotronHTwoTowerForCausalLM._forward_tower_with_cache (reference_modeling.py:254),
-# swapping attention causal<->bidirectional; no time conditioning; fresh cache = no seeding.
+# Mirrors NemotronHTwoTowerForCausalLM._forward_tower_with_cache (reference_modeling.py:254)
+# WITHOUT a cache (single pass, zero initial state), swapping attention causal<->bidirectional.
 # ======================================================================
-def _bidir_attention(mixer, hidden):
-    """Bidirectional self-attention over just the block (no context KV, is_causal=False).
-    Same projections as _denoiser_block_attention but without the concatenated context cache."""
-    from twotower import MASK_TOKEN_ID  # noqa: F401  (keep import local & lazy)
+def _self_attention(mixer, hidden, is_causal):
+    """Self-attention over just the block (no context KV). is_causal toggles causal vs bidir."""
+    from reference_modeling import repeat_kv
     B, Lq, _ = hidden.shape
     q = mixer.q_proj(hidden).view(B, Lq, mixer.num_heads, mixer.head_dim).transpose(1, 2)
     k = mixer.k_proj(hidden).view(B, Lq, mixer.num_key_value_heads, mixer.head_dim).transpose(1, 2)
     v = mixer.v_proj(hidden).view(B, Lq, mixer.num_key_value_heads, mixer.head_dim).transpose(1, 2)
-    from reference_modeling import repeat_kv
     k = repeat_kv(k, mixer.num_key_value_groups)
     v = repeat_kv(v, mixer.num_key_value_groups)
-    a = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False)
+    a = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=is_causal)
     a = a.transpose(1, 2).contiguous().view(B, Lq, mixer.num_heads * mixer.head_dim)
     return mixer.o_proj(a)
 
 
-def capture_clean(model, tower, input_ids, bidirectional):
-    """Return (hidden_states[53], mixer_outs[52], residual_ins[52]) all cpu float, one clean pass."""
+def capture_clean(model, tower, input_ids, bidir):
+    """One clean pass, no cache. Returns hidden_states[53] (cpu float)."""
     device = next(tower.parameters()).device
     ids = input_ids.to(device)
-    cache = model._make_cache(model.config, ids.shape[0], model.dtype, device)
     cache_position = torch.arange(ids.shape[1], device=device)
     hidden = tower.embeddings(ids)
-    causal_mask = tower._update_causal_mask(None, hidden, cache_position)
-
     hs = [hidden[0].detach().float().cpu()]
-    mixer_outs, residual_ins = [], []
-    for layer_idx, block in enumerate(tower.layers):
+    for block in tower.layers:
         residual = hidden
         if block.residual_in_fp32:
             residual = residual.to(torch.float32)
         h = block.norm(hidden.to(dtype=block.norm.weight.dtype))
-
         if block.block_type == "mamba":
-            h = block.mixer(h, cache_params=cache, cache_position=cache_position)
+            h = block.mixer(h, cache_params=None, cache_position=cache_position)
         elif block.block_type == "attention":
-            if bidirectional:
-                h = _bidir_attention(block.mixer, h)
-            else:
-                h, _, _ = block.mixer(h, attention_mask=causal_mask,
-                                      past_key_value=cache, cache_position=cache_position)
+            h = _self_attention(block.mixer, h, is_causal=(not bidir))
         elif block.block_type in ("mlp", "moe"):
             h = block.mixer(h)
         else:
             raise ValueError(block.block_type)
-
-        mixer_outs.append(h[0].detach().float().cpu())
-        residual_ins.append(residual[0].detach().float().cpu())
         hidden = residual + h
         hs.append(hidden[0].detach().float().cpu())
-    return hs, mixer_outs, residual_ins
+    return hs
 
 
 # ======================================================================
@@ -195,9 +185,7 @@ def capture_natural(model, cache_state, block_ids, t_scalar, ssm_diag):
 
     den_cache = model._build_denoiser_cache_diffusion(cache_state, den_device)
     hidden = tower.embeddings(den_input)
-
     hs = [hidden[0].detach().float().cpu()]
-    mixer_outs, residual_ins = [], []
     for layer_idx, block in enumerate(tower.layers):
         residual = hidden
         if block.residual_in_fp32:
@@ -221,7 +209,6 @@ def capture_natural(model, cache_state, block_ids, t_scalar, ssm_diag):
             d_conv = block.mixer.conv_kernel_size
             init_conv = den_cache.conv_states[layer_idx][..., -(d_conv - 1):]
             init_ssm = den_cache.ssm_states[layer_idx].contiguous()
-            # --- (d) diagnostic: seeded SSM state magnitude vs hidden magnitude ---
             ssm_diag.append({
                 "layer": layer_idx,
                 "init_ssm_max": init_ssm.abs().max().item(),
@@ -237,13 +224,11 @@ def capture_natural(model, cache_state, block_ids, t_scalar, ssm_diag):
         else:
             h = block.mixer(h)
 
-        mixer_outs.append(h[0].detach().float().cpu())
-        residual_ins.append(residual[0].detach().float().cpu())
         if mod_p is not None:
             h = gate.unsqueeze(1) * h
         hidden = residual + h
         hs.append(hidden[0].detach().float().cpu())
-    return hs, mixer_outs, residual_ins
+    return hs
 
 
 # ======================================================================
@@ -258,11 +243,12 @@ def probe_all(model, tok, prompt, args, agg, ssm_diag_store, keep_prompt0):
                      max_length=args.max_len).input_ids
 
     caps = {}
-    caps["ctx_clean"] = capture_clean(model, model.context_tower, prompt_ids, bidirectional=False)
-    caps["den_clean"] = capture_clean(model, model.denoiser_tower, prompt_ids, bidirectional=False)
-    caps["den_bidir"] = capture_clean(model, model.denoiser_tower, prompt_ids, bidirectional=True)
+    caps["ctx_clean"] = capture_clean(model, model.context_tower, prompt_ids, bidir=False)
+    caps["den_clean"] = capture_clean(model, model.denoiser_tower, prompt_ids, bidir=False)
+    caps["den_bidir"] = capture_clean(model, model.denoiser_tower, prompt_ids, bidir=True)
 
-    cache_state = model._build_context_cache(prompt_ids.to(next(model.context_tower.parameters()).device))
+    ctx_device = next(model.context_tower.parameters()).device
+    cache_state = model._build_context_cache(prompt_ids.to(ctx_device))
     nat_len = args.nat_block if args.nat_block > 0 else prompt_ids.shape[1]
     block = torch.full((1, nat_len), MASK_TOKEN_ID, dtype=torch.long)
     ssm_diag = []
@@ -271,18 +257,16 @@ def probe_all(model, tok, prompt, args, agg, ssm_diag_store, keep_prompt0):
         ssm_diag_store.extend(ssm_diag)
 
     for name in PATHS:
-        hs, mixer_outs, residual_ins = caps[name]
+        hs = caps[name]
         collapse, adjacent = structure_of(hs)
-        rel = rel_update_of(mixer_outs, residual_ins)
         agg[name]["collapse"].append(collapse)
         agg[name]["adjacent"].append(adjacent)
-        agg[name]["rel"].append(rel)
+        agg[name]["rel"].append(rel_update_from_hs(hs))
         if keep_prompt0:
             agg[name]["heat0"] = cosine_matrix(hs[args.heat_layer]).numpy()
 
 
 def _mean_rows(rows):
-    """mean over prompts of a list of equal-length per-layer lists (nan-safe)."""
     a = np.array(rows, dtype=float)
     return np.nanmean(a, axis=0)
 
@@ -301,14 +285,14 @@ def make_plot(curves, out_png):
         col = curves[name]["collapse"]; adj = curves[name]["adjacent"]; rel = curves[name]["rel"]
         axes[0].plot(range(len(col)), col, "-o", ms=2.5, color=c, label=lbl)
         axes[1].plot(range(len(adj)), adj, "-o", ms=2.5, color=c, label=lbl)
-        axes[2].plot(range(len(rel)), rel, "-o", ms=2.5, color=c, label=lbl)
+        axes[2].plot(range(1, len(rel) + 1), rel, "-o", ms=2.5, color=c, label=lbl)
     for ax in axes:
         for L in ATTN_LAYERS:
             ax.axvline(L, ls=":", lw=0.7, color="gray")
         ax.set_xlabel("layer  (dotted = attention layers 5/12/19/26/33/42)")
     axes[0].set_title("token collapse (mean off-diag cosine)"); axes[0].set_ylabel("cosine")
     axes[1].set_title("local smoothness (adjacent-token cosine)")
-    axes[2].set_title("rel_update  ||mixer_out|| / ||residual_in||"); axes[2].set_ylabel("ratio")
+    axes[2].set_title("rel_update  ||Δh_L|| / ||h_{L-1}||"); axes[2].set_ylabel("ratio")
     axes[0].legend(fontsize=7, loc="lower right")
     fig.suptitle("4-way controlled layer probe: what causes the denoiser token collapse?")
     fig.tight_layout()
@@ -329,15 +313,15 @@ def print_verdict(curves):
     gap_weight = p["den_clean"] - p["ctx_clean"]
     gap_bidir = p["den_bidir"] - p["den_clean"]
     gap_natural = p["den_natural"] - p["den_bidir"]
-    print(f"\n  den_clean - ctx_clean  = {gap_weight:+.3f}   (weight drift (a))")
-    print(f"  den_bidir - den_clean  = {gap_bidir:+.3f}   (bidirectional attn (c))")
+    print(f"\n  den_clean  - ctx_clean = {gap_weight:+.3f}   (weight drift (a))")
+    print(f"  den_bidir  - den_clean = {gap_bidir:+.3f}   (bidirectional attn (c))")
     print(f"  den_natural- den_bidir = {gap_natural:+.3f}   (MASK input / seeding (b)/(d))")
-    lead = max([("a", gap_weight), ("c", gap_bidir), ("bd", gap_natural)], key=lambda kv: kv[1])
+    lead = max([("a", gap_weight), ("c", gap_bidir), ("b/d", gap_natural)], key=lambda kv: kv[1])
     print(f"\n  >>> largest single-factor jump: ({lead[0]})  Δ={lead[1]:+.3f}")
     if gap_weight > 0.15:
         print("  >>> den_clean already collapses on clean causal text -> WEIGHT DRIFT (a) is real.")
     else:
-        print("  >>> den_clean ~ ctx_clean -> NOT weight drift; look at (c)/(b)/(d).")
+        print("  >>> den_clean ~ ctx_clean -> NOT weight drift; the cause is (c)/(b)/(d).")
 
 
 def main():
@@ -383,7 +367,6 @@ def main():
                   "adjacent": _mean_rows(agg[n]["adjacent"]),
                   "rel": _mean_rows(agg[n]["rel"])} for n in PATHS}
 
-    # --- SSM seeding-magnitude diagnostic (test (d)) ---
     print("\n=== den_natural seeding diagnostic (init_ssm vs hidden, prompt 0) ===")
     ratios = []
     for d in ssm_diag_store:
@@ -398,7 +381,6 @@ def main():
 
     print_verdict(curves)
 
-    # --- save npz ---
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     save = {}
     for n in PATHS:
@@ -424,12 +406,10 @@ def _selftest():
     assert abs(offdiag_mean(cosine_matrix(same)) - 1.0) < 1e-5
     orth = torch.eye(T)
     assert abs(offdiag_mean(cosine_matrix(orth))) < 1e-6
-    # rel_update: mixer_out half the norm of residual -> 0.5
-    ri = [torch.ones(4, D) * 2.0]
-    mo = [torch.ones(4, D) * 1.0]
-    r = rel_update_of(mo, ri)[0]
+    # rel_update: h0 norm 2*sqrt(D), delta norm sqrt(D) -> 0.5
+    hs = [torch.ones(4, D) * 2.0, torch.ones(4, D) * 3.0]
+    r = rel_update_from_hs(hs)[0]
     assert abs(r - 0.5) < 1e-5, r
-    # structure_of plumbing
     col, adj = structure_of([same, orth])
     assert abs(col[0] - 1.0) < 1e-5 and abs(col[1]) < 1e-6
     print(f"[selftest] OK  same_offdiag=1.0  orth_offdiag~0  rel_update={r:.3f}(==0.5)  "
