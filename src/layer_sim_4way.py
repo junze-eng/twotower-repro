@@ -280,7 +280,9 @@ def probe_all(model, tok, prompt, args, agg, ssm_diag_store, keep_prompt0):
         agg[name]["adjacent"].append(adjacent)
         agg[name]["rel"].append(rel_update_from_hs(hs))
         if keep_prompt0:
-            agg[name]["heat0"] = cosine_matrix(hs[args.heat_layer]).numpy()
+            heat_layers = [int(x) for x in str(args.heat_layers).split(",") if x.strip() != ""]
+            agg[name]["heat"] = {L: cosine_matrix(hs[L]).numpy()
+                                 for L in heat_layers if L < len(hs)}
 
 
 def _mean_rows(rows):
@@ -350,7 +352,8 @@ def main():
     ap.add_argument("--nat-block", type=int, default=0,
                     help="den_natural MASK block length; 0 = match prompt length")
     ap.add_argument("--t", type=float, default=1.0, help="mask-ratio fed to AdaLN for den_natural")
-    ap.add_argument("--heat-layer", type=int, default=26)
+    ap.add_argument("--heat-layers", default="4,26,50",
+                    help="hidden-state indices to save token x token heatmaps for (prompt 0, all paths)")
     ap.add_argument("--single", action="store_true")
     ap.add_argument("--plot", action="store_true")
     ap.add_argument("--selftest", action="store_true")
@@ -373,7 +376,7 @@ def main():
           inspect.signature(model._forward_tower_with_cache))
     print(f">>> attention layers (bidirectional in denoiser): {ATTN_LAYERS}")
 
-    agg = {n: {"collapse": [], "adjacent": [], "rel": [], "heat0": None} for n in PATHS}
+    agg = {n: {"collapse": [], "adjacent": [], "rel": [], "heat": {}} for n in PATHS}
     ssm_diag_store = []
     with torch.no_grad():
         for i, prompt in enumerate(prompts):
@@ -404,13 +407,13 @@ def main():
         save[f"{n}_collapse"] = curves[n]["collapse"]
         save[f"{n}_adjacent"] = curves[n]["adjacent"]
         save[f"{n}_rel_update"] = curves[n]["rel"]
-        if agg[n]["heat0"] is not None:
-            save[f"{n}_heat0"] = agg[n]["heat0"]
+        for L, M in agg[n]["heat"].items():
+            save[f"{n}_heat_L{L}"] = M
     save["attn_layers"] = np.array(ATTN_LAYERS)
     save["ssm_diag"] = np.array([[d["layer"], d["init_ssm_max"], d["init_ssm_mean"],
                                   d["hidden_max"], d["hidden_mean"]] for d in ssm_diag_store])
     np.savez(args.out, **save)
-    print(f"\n[save] wrote {args.out}  ({len(prompts)} prompts, heat_layer=L{args.heat_layer})")
+    print(f"\n[save] wrote {args.out}  ({len(prompts)} prompts, heat_layers={args.heat_layers})")
 
     if args.plot:
         make_plot(curves, "figs/fig_layer_4way.png")
