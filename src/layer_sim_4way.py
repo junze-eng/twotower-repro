@@ -128,15 +128,23 @@ def rel_update_from_hs(hs):
 # Mirrors NemotronHTwoTowerForCausalLM._forward_tower_with_cache (reference_modeling.py:254)
 # WITHOUT a cache (single pass, zero initial state), swapping attention causal<->bidirectional.
 # ======================================================================
+def _repeat_kv(x, n_rep):
+    """Expand GQA KV heads to match query heads (standard HF repeat_kv), inlined so we
+    don't depend on the model module's import path (differs local vs HF-cache)."""
+    b, n_kv, s, d = x.shape
+    if n_rep == 1:
+        return x
+    return x[:, :, None, :, :].expand(b, n_kv, n_rep, s, d).reshape(b, n_kv * n_rep, s, d)
+
+
 def _self_attention(mixer, hidden, is_causal):
     """Self-attention over just the block (no context KV). is_causal toggles causal vs bidir."""
-    from reference_modeling import repeat_kv
     B, Lq, _ = hidden.shape
     q = mixer.q_proj(hidden).view(B, Lq, mixer.num_heads, mixer.head_dim).transpose(1, 2)
     k = mixer.k_proj(hidden).view(B, Lq, mixer.num_key_value_heads, mixer.head_dim).transpose(1, 2)
     v = mixer.v_proj(hidden).view(B, Lq, mixer.num_key_value_heads, mixer.head_dim).transpose(1, 2)
-    k = repeat_kv(k, mixer.num_key_value_groups)
-    v = repeat_kv(v, mixer.num_key_value_groups)
+    k = _repeat_kv(k, mixer.num_key_value_groups)
+    v = _repeat_kv(v, mixer.num_key_value_groups)
     a = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=is_causal)
     a = a.transpose(1, 2).contiguous().view(B, Lq, mixer.num_heads * mixer.head_dim)
     return mixer.o_proj(a)
