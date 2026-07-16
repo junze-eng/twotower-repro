@@ -19,7 +19,11 @@ MASK_TOKEN_ID = 3  # confirmed by the HF model card
 
 
 def load_tokenizer():
-    return AutoTokenizer.from_pretrained(MODEL_NAME)
+    # trust_remote_code=True is REQUIRED: the repo ships a custom NemotronHConfig that isn't in
+    # transformers' AutoTokenizer config->tokenizer map, so without it AutoTokenizer raises
+    # "Unrecognized configuration class ... to build an AutoTokenizer". The flag lets it load the
+    # standard tokenizer files (tokenizer.json) directly. Matches the model load below.
+    return AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
 
 def _fixed_denoiser_block_mamba(self, mixer, hidden, init_conv, init_ssm, return_states=False):
